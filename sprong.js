@@ -1,6 +1,7 @@
 /*
   sprong is tennis pong ?
-  NO.  It is SPRONG!
+  NO.  It is SPRONG.
+  Goals on the ends. Walls bounce. Mouth eats the ball.
  */
 const REF_W = 800;
 const MAX_RADIUS = 200;
@@ -11,6 +12,7 @@ const DEAD_FADE_MS = 520;
 const KILL_X_ARM = 9 * 0.8;
 const KILL_X_PULL = 0.3;
 const TARGET_W_PERC = 0.25;
+const TARGET_H_PERC = 0.4;
 const GAMES_PER_SET = 3;
 const NEON = "#39ff14";
 const BALL = "#eeee33";
@@ -40,6 +42,9 @@ var state = {
   w: 0,
   h: 0,
   targetW: 0,
+  targetH: 0,
+  goalY0: 0,
+  goalY1: 0,
   viewW: 0,
   viewH: 0,
   dpr: 1,
@@ -164,6 +169,15 @@ function startGame() {
   leaveTitle(false);
 }
 
+function inGoalMouth(y) {
+  return y >= state.goalY0 && y <= state.goalY1;
+}
+
+function inTargetZone(side, x, y) {
+  if (!inGoalMouth(y)) return false;
+  return side === 0 ? x <= state.targetW : x >= state.w - state.targetW;
+}
+
 function resize() {
   const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   const viewW = window.innerWidth;
@@ -182,6 +196,9 @@ function resize() {
   state.w = Math.max(viewW, viewH);
   state.h = Math.min(viewW, viewH);
   state.targetW = state.w * 0.5 * TARGET_W_PERC;
+  state.targetH = state.h * TARGET_H_PERC;
+  state.goalY0 = (state.h - state.targetH) * 0.5;
+  state.goalY1 = state.goalY0 + state.targetH;
   const prevScale = state.scale || 0;
   state.scale = state.w / REF_W;
   ballSetScale(state.scale);
@@ -206,11 +223,6 @@ function screenToWorld(sx, sy) {
 
 function sideOf(x) {
   return x < state.w * 0.5 ? 0 : 1;
-}
-
-function inTargetZone(side, x) {
-  const depth = state.w * 0.5 / 3;
-  return side === 0 ? x <= depth : x >= state.w - depth;
 }
 
 function newPoint(server) {
@@ -308,7 +320,7 @@ function onTap(x, y) {
   const side = sideOf(x);
   if (state.mode === "pause") return;
   if (state.mode === "serve") {
-    if (side === state.server && inTargetZone(side,x) ) startToss(x, y);
+    if (side === state.server && inTargetZone(side, x, y) ) startToss(x, y);
     return;
   }
   if (state.mode === "toss") {
@@ -384,7 +396,7 @@ function bindInput() {
       onCalTap(p.x, p.y);
       return;
     }
-    if( !inTargetZone(0,p.x) && !inTargetZone(1,p.x) ){
+    if( !inTargetZone(0, p.x, p.y) && !inTargetZone(1, p.x, p.y) ){
       resetDown();
     }
     onTap(p.x, p.y);
@@ -428,11 +440,29 @@ function updateWaves(dt) {
 function updatePlay(dt) {
   const b = state.ball;
   ballStep(b, dt);
-  const half = ballSize() * 0.5;
-  const missSide = state.lastHitter < 0 ? state.server : state.lastHitter;
-  if (b.x + half < 0) scoreFor(1);
-  else if (b.x - half > state.w) scoreFor(0);
-  else if (b.y + half < 0 || b.y - half > state.h) scoreFor((missSide+1)%2);
+  const r = ballSize() * 0.5;
+
+  if (b.y - r < 0) {
+    b.y = r;
+    if (b.vy < 0) b.vy = -b.vy;
+  } else if (b.y + r > state.h) {
+    b.y = state.h - r;
+    if (b.vy > 0) b.vy = -b.vy;
+  }
+
+  if (b.x - r < 0) {
+    if (inGoalMouth(b.y)) scoreFor(1);
+    else {
+      b.x = r;
+      if (b.vx < 0) b.vx = -b.vx;
+    }
+  } else if (b.x + r > state.w) {
+    if (inGoalMouth(b.y)) scoreFor(0);
+    else {
+      b.x = state.w - r;
+      if (b.vx > 0) b.vx = -b.vx;
+    }
+  }
 }
 
 function update(dt) {
@@ -541,54 +571,57 @@ function drawCal() {
       ctx.save();
       ctx.translate(cx, cy);
       ctx.fillStyle = BALL;
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.5, 0, Math.PI * 2);
+      ctx.fill();
       if (selected) {
         ctx.strokeStyle = NEON;
         ctx.lineWidth = 3;
-        ctx.strokeRect(-s * 0.5 - 4, -s * 0.5 - 4, s + 8, s + 8);
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.5 + 4, 0, Math.PI * 2);
+        ctx.stroke();
       }
-      ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
       ctx.restore();
     }
   }
   ctx.restore();
 }
 
-function drawTargetZones() {
-  const w = state.w, h = state.h, depth = state.targetW;
+function strokeGoalBox(xBack, xFront, y0, y1) {
+  ctx.beginPath();
+  ctx.moveTo(xFront, y0);
+  ctx.lineTo(xBack, y0);
+  ctx.lineTo(xBack, y1);
+  ctx.lineTo(xFront, y1);
+  ctx.stroke();
+}
+
+function drawGoalBoxes() {
+  const w = state.w;
+  const depth = state.targetW;
+  const y0 = state.goalY0;
+  const y1 = state.goalY1;
   ctx.save();
+  ctx.lineJoin = "miter";
+  ctx.lineCap = "butt";
   ctx.lineWidth = 6;
   ctx.strokeStyle = "#000000";
   ctx.globalAlpha = 1;
-  ctx.beginPath();
-  ctx.moveTo(depth, 0);
-  ctx.lineTo(depth, h);
-  ctx.moveTo(w - depth, 0);
-  ctx.lineTo(w - depth, h);
-  ctx.stroke();
+  strokeGoalBox(0, depth, y0, y1);
+  strokeGoalBox(w, w - depth, y0, y1);
   ctx.lineWidth = 2;
   ctx.strokeStyle = NEON;
   ctx.globalAlpha = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(depth, 0);
-  ctx.lineTo(depth, h);
-  ctx.moveTo(w - depth, 0);
-  ctx.lineTo(w - depth, h);
-  ctx.stroke();
+  strokeGoalBox(0, depth, y0, y1);
+  strokeGoalBox(w, w - depth, y0, y1);
   ctx.restore();
 }
 
 function drawNet() {
   ctx.save();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = NEON;  
-  ctx.globalAlpha = 0.2;
-  ctx.beginPath();
-  ctx.moveTo(0, state.h*0.5);
-  ctx.lineTo(state.w, state.h*0.5);
-  ctx.stroke();
   ctx.lineWidth = 8;
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = "#000000";  
+  ctx.strokeStyle = "#000000";
   ctx.beginPath();
   ctx.moveTo(state.w * 0.5, 0);
   ctx.lineTo(state.w * 0.5, state.h);
@@ -728,13 +761,24 @@ function drawKillMarks() {
 }
 
 function drawBallStamp(x, y, z, r, alpha) {
-  const s = ballDrawSize(z);
+  const rad = ballDrawSize(z) * 0.5;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(x, y);
   ctx.rotate(r);
   ctx.fillStyle = BALL;
-  ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
+  ctx.beginPath();
+  ctx.arc(0, 0, rad, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(20,20,0,0.38)";
+  ctx.lineWidth = Math.max(1, rad * 0.14);
+  ctx.beginPath();
+  ctx.moveTo(0, -rad);
+  ctx.lineTo(0, rad);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, rad * 0.55, -0.85, 0.85);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -782,7 +826,7 @@ function draw() {
     return;
   }  
   drawNet();
-  drawTargetZones();
+  drawGoalBoxes();
   drawKillMarks();
   drawChevron();
   drawScores();
