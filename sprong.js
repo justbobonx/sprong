@@ -71,3 +71,118 @@ var state = {
   deadFade: 1,
   last: 0,
 };
+
+var calPick = { ball: 1, racket: 1 };
+var calBtn = { x0: 0, y0: 0, x1: 0, y1: 0 };
+
+function saveState() {
+  try {
+    localStorage.setItem('state', JSON.stringify(state));
+  } catch (e) {
+    console.error('saveState failed', e);
+  }
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem('state');
+    if (raw == null) return;
+    const loaded = JSON.parse(raw);
+    loaded.last = 0;
+    if (!loaded.ball || typeof loaded.ball !== "object") loaded.ball = ballFresh();
+    else {
+      if (!loaded.ball.trail) loaded.ball.trail = [];
+      if (loaded.ball.vz == null) loaded.ball.vz = 0;
+      if (loaded.ball.trailT == null) loaded.ball.trailT = 0;
+    }
+    if (loaded.rallyMax == null) loaded.rallyMax = VOLLEY_MAX_START;
+    if (!loaded.marks) loaded.marks = [];
+    if (!loaded.bumpers || loaded.bumpers.length !== 2) {
+      loaded.bumpers = [{ live: null, fade: null }, { live: null, fade: null }];
+    }
+    if (loaded.deadFade == null) loaded.deadFade = 1;
+    if (loaded.scale == null) loaded.scale = 1;
+    state = loaded;
+  } catch (e) {
+    console.error('loadState failed', e);
+  }
+}
+
+function calStepValue(i) {
+  if (CAL_STEPS <= 1) return CAL_ADJ_MIN;
+  return CAL_ADJ_MIN + (CAL_ADJ_MAX - CAL_ADJ_MIN) * i / (CAL_STEPS - 1);
+}
+
+function loadCal() {
+  try {
+    const raw = localStorage.getItem(CAL_LS_KEY);
+    if (raw == null) return false;
+    const c = JSON.parse(raw);
+    if (typeof c.ball !== "number" || typeof c.racket !== "number") return false;
+    if (!(c.ball > 0) || !(c.racket > 0)) return false;
+    calPick.ball = c.ball;
+    calPick.racket = c.racket;
+    ballSetUserScale(calPick.ball, calPick.racket);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function saveCal() {
+  try {
+    localStorage.setItem(CAL_LS_KEY, JSON.stringify({
+      ball: calPick.ball,
+      racket: calPick.racket
+    }));
+  } catch (e) {
+    console.error('saveCal failed', e);
+  }
+  ballSetUserScale(calPick.ball, calPick.racket);
+}
+
+function requestPageFullscreen() {
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen;
+  if (!req) return Promise.resolve();
+  try {
+    const p = req.call(el);
+    if (p && typeof p.then === "function") return p.catch(function () {});
+  } catch (err) {}
+  return Promise.resolve();
+}
+
+function beginPlay() {
+  loadState();
+  resize();
+  ballSetUserScale(calPick.ball, calPick.racket);
+  const startServer = state.scoredBy >=0 ? state.scoredBy : Math.round(Math.random());
+  newPoint(startServer);
+}
+
+function enterCal(which) {
+  state.mode = which === "racket" ? "cal-racket" : "cal-ball";
+}
+
+function leaveTitle(forceCal) {
+  requestPageFullscreen();
+  if (forceCal || !loadCal()) {
+    enterCal("ball");
+    return;
+  }
+  beginPlay();
+}
+
+function startGame() {
+  if (state.mode !== "title") return;
+  leaveTitle(false);
+}
+
+function inGoalMouth(y) {
+  return y >= state.goalY0 && y <= state.goalY1;
+}
+
+function inTargetZone(side, x, y) {
+  if (!inGoalMouth(y)) return false;
+  return side === 0 ? x <= state.targetW : x >= state.w - state.targetW;
+}
